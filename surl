@@ -1,0 +1,119 @@
+getwd()  #查看目前的工作目录
+setwd('E:/survival-plot')   #设置当前工作目录
+getwd() #再次查看并确认
+
+# 加载R包
+library(TCGAbiolinks)
+library(tibble)
+library(MatrixGenerics)
+library(matrixStats)
+library(SummarizedExperiment)
+library("stringr")
+library(dplyr)
+library(stats4)
+library(BiocGenerics)
+library(parallel)
+library("AnnotationDbi")
+library("org.Hs.eg.db")
+library(survival)
+library(ggplot2)
+library(ggpubr)
+library(survminer)
+
+#数据下载#
+TCGAbiolinks:::getGDCprojects()$project_id
+cancer_type="TCGA-LIHC"
+clinical=GDCquery_clinic(project=cancer_type,type="clinical")
+dim(clinical)
+clinical[1:4,1:4]
+head(colnames(clinical))
+query <- GDCquery(project =cancer_type,
+                  data.category = "Transcriptome Profiling",
+                  data.type = "Gene Expression Quantification",
+                  workflow.type = "STAR - Counts"
+)
+
+GDCdownload(query, method = "api", files.per.chunk = 50)
+expdat <- GDCprepare(query)###读取下载好的数据
+
+counts <- as.data.frame(assay(expdat))#默认提取counts数据
+head(counts)###矩阵预览
+
+group_list=ifelse(as.numeric(substr(colnames(counts),14,15)) < 10,'tumor','normal')
+table(group_list)
+#仅取tumor样本
+exp_tumor=counts[,group_list=='tumor']
+
+meta = clinical
+#第一列作为行名
+meta <- column_to_rownames(meta,var = "submitter_id")
+colnames(meta)
+#筛选我们感兴趣的临床信息
+meta=meta[,colnames(meta) %in% c("vital_status",
+                                 "days_to_last_follow_up",
+                                 "days_to_death",
+                                 "race",
+                                 "gender",
+                                 "age_at_index",
+                                 "tumor_stage")]
+
+#调整、筛选临床样本信息数量与顺序与表达矩阵相同
+meta=meta[match(substr(colnames(exp_tumor),1,12),rownames(meta)),]
+
+#days_to_last_follow_up：距离死亡的时间
+#day_to_last_follow_up：最后一个随访时间到开始时间
+meta$days_to_death[is.na(meta$days_to_death)] <- 0   #缺失值标记为0
+meta$days_to_last_follow_up[is.na(meta$days_to_last_follow_up)] <- 0
+head(meta)
+#添加一列days数据，当患者dead时使用死亡时间days_to_death，反之则使用days_to_last_follow_up的数据
+meta$days=ifelse(meta$vital_status=='Dead',meta$days_to_death,meta$days_to_last_follow_up)
+
+
+#时间以月份记，保留两位小数
+meta$time=round(meta$days/30,2)
+meta$time = as.numeric(meta$time)
+#2、根据生死定义活着是0，死的是1
+meta$event=ifelse(meta$vital_status=='Alive',0,1)
+table(meta$event)
+
+#3 年龄分组(部分样本缺失，考虑可能的影响应该不大)
+meta$age_at_index[is.na(meta$age_at_index)] <- 0
+meta$age_at_index=as.numeric(meta$age_at_index)
+meta$age_group=ifelse(meta$age_at_index>median(meta$age_at_index),'older','younger')
+
+#将ENS号转换为基因名
+ENSEMBL=unlist(str_split(rownames(exp_tumor),"[.]",simplify=T))[,1]
+#去除ENS的版本号
+df<-as.data.frame(ENSEMBL)
+df$symbol <- mapIds(org.Hs.eg.db,
+                    
+                    keys=ENSEMBL,
+                    
+                    column="SYMBOL",
+                    
+                    keytype="ENSEMBL")
+
+###选择目标基因###
+x <- nrow(exp_tumor)  #统计表格行数
+i <- 1
+f <- 0
+###将基因名转换为对应的id
+df[is.na(df)] <- 0 ####将数据框中的NA值替换为0
+genNAME<-'TSPAN31'
+while (i <= x ) {
+  if(df[i,2]==genNAME)
+  {
+    genID <- df[i,1]
+    f<-i
+  }
+  i=i+1
+}
+
+genID 
+exp_data<-exp_tumor
+
+exprSet2<-as.matrix(exp_data)###不转矩阵无法进行后续的计算
+#######选择目标基因进行生存分析 
+meta$gene = ifelse(exprSet2[f,]>median(exprSet2[f,]),'high','low')
+sfit1=survfit(Surv(time, event)~gene, data=meta)
+ggsurvplot(sfit1,pval =TRUE, data = meta, risk.table = TRUE)
