@@ -1,3 +1,21 @@
+--------------#先安装必要包#----------------
+
+if (!requireNamespace("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+BiocManager::install("TCGAbiolinks")
+install.packages("tibble")
+BiocManager::install("MatrixGenerics")
+BiocManager::install("survival")
+BiocManager::install("ggpubr")
+BiocManager::install("survminer")
+BiocManager::install("AnnotationDbi")
+BiocManager::install("org.Hs.eg.db")
+-----------------#END#--------------------
+
+
+-------------#正式代码#--------------------
+
+
 getwd()  #查看目前的工作目录
 setwd('E:/survival-plot')   #设置当前工作目录
 getwd() #再次查看并确认
